@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex, nofollow" />
+<title>OPEX Ironclad Requests</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script>
+  tailwind.config = {
+    theme: { extend: { colors: { brand: { dark: "#062115", lime: "#91c13e" } } } }
+  };
+</script>
+</head>
+<body class="bg-stone-100 text-slate-800 min-h-screen">
+
+<header class="bg-brand-dark text-white">
+  <div class="max-w-7xl mx-auto px-6 py-5 flex flex-wrap items-center justify-between gap-4">
+    <div class="flex items-center gap-3">
+      <div class="font-black tracking-tight text-lg">
+        HELLO<span class="bg-brand-lime text-brand-dark px-1.5 ml-1 rounded">FRESH</span>
+      </div>
+      <div class="h-8 w-px bg-white/20"></div>
+      <div>
+        <h1 class="font-bold leading-tight">Ironclad Requests</h1>
+        <p class="text-xs text-white/60">People OPEX · OPEXIRCL</p>
+      </div>
+    </div>
+    <div id="synced" class="text-xs text-white/60">Loading…</div>
+  </div>
+</header>
+
+<main class="max-w-7xl mx-auto px-6 py-6 space-y-6">
+  <nav id="tabs" class="flex flex-wrap gap-2"></nav>
+
+  <section id="kpis" class="grid grid-cols-2 md:grid-cols-4 gap-4"></section>
+
+  <section class="bg-white rounded-xl shadow-sm p-4 flex flex-wrap gap-3 items-center">
+    <input id="search" type="search" placeholder="Search key, summary, reporter…"
+      class="flex-1 min-w-[220px] border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-lime" />
+    <div id="dyn" class="contents"></div>
+    <select id="sort" class="border border-slate-300 rounded-lg px-3 py-2 text-sm">
+      <option value="created_desc">Newest first</option>
+      <option value="created_asc">Oldest first</option>
+      <option value="updated_desc">Recently updated</option>
+      <option value="priority">Urgent first</option>
+    </select>
+  </section>
+
+  <p id="count" class="text-sm text-slate-500"></p>
+  <section id="cards" class="grid grid-cols-1 lg:grid-cols-2 gap-4"></section>
+</main>
+
+<div id="modal" class="hidden fixed inset-0 bg-black/50 z-50 items-center justify-center p-4">
+  <div class="bg-white rounded-xl max-w-2xl w-full max-h-[85vh] overflow-y-auto p-6 relative">
+    <button onclick="closeModal()" class="absolute top-3 right-4 text-slate-400 hover:text-slate-700 text-2xl leading-none">&times;</button>
+    <div id="modal-body"></div>
+  </div>
+</div>
+
+<script>
+// ---- CONFIG ---------------------------------------------------------------
+// Publish the "Master Jira Database" tab as CSV:
+// File > Share > Publish to web > select "Master Jira Database" > Format: CSV
+const CSV_URL = "PASTE_PUBLISHED_CSV_URL_HERE";
+const JIRA_BROWSE = "https://hellofresh.atlassian.net/browse/"; // verify this matches your Jira site
+const REFRESH_MS = 5 * 60 * 1000; // Jira syncs to the sheet every 5 minutes
+
+// One entry per Ironclad form. "type" must match the Request Type column exactly.
+// filters: dropdowns shown for this tab (each field's options come from the data).
+//          display (optional) shortens long option labels; the filter still matches the full value.
+// extras:  fields shown on each card when they have a value.
+const FORMS = [
+  {
+    type: "New Template / Template Change Request",
+    label: "New Template / Change",
+    extras: ["Category", "Country"],
+    filters: [
+      { field: "Category", label: "Category" },
+      { field: "Country", label: "Country" },
+      { field: "Priority", label: "Priority" },
+      { field: "Status", label: "Status" },
+    ],
+  },
+  {
+    type: "System Incident & Support",
+    label: "System Incident & Support",
+    extras: ["Impact", "Country"],
+    filters: [
+      { field: "Impact", label: "Impact", display: v => v.split(" (")[0] },
+      { field: "Country", label: "Country" },
+      { field: "Priority", label: "Priority" },
+      { field: "Status", label: "Status" },
+    ],
+  },
+  {
+    type: "Ironclad Enablement Content Request",
+    label: "Enablement Content",
+    extras: ["Format"],
+    filters: [
+      { field: "Format", label: "Format", display: v => v.split(" (")[0] },
+      { field: "Status", label: "Status" },
+    ],
+  },
+  {
+    type: "Request Ironclad Software Access",
+    label: "Software Access",
+    extras: ["Permission", "Email address:", "Market"],
+    filters: [
+      { field: "Permission", label: "Permission" },
+      { field: "Market", label: "Market" },
+      { field: "Status", label: "Status" },
+    ],
+  },
+];
+
+// ---- STATE & HELPERS ------------------------------------------------------
+let rows = [];
+let current = FORMS[0].type;
+let filterState = {};   // field -> selected normalized value ("" = all)
+let visible = [];
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const val = (r, k) => (r[k] || "").trim();
+const norm = s => (s || "").replace(/\s+/g, " ").trim();
+const isOpen = r => val(r, "Open/Resolved").toLowerCase() === "open";
+const isUrgent = r => val(r, "Priority").toLowerCase() === "urgent";
+const toDate = s => { const d = new Date(s + "T00:00:00"); return isNaN(d) ? null : d; };
+const fmtDate = s => { const d = toDate(s); return d ? d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "—"; };
+const currentForm = () => FORMS.find(f => f.type === current);
+
+function statusPill(s) {
+  const v = s.toLowerCase();
+  const cls = (v === "resolved" || v === "closed") ? "bg-lime-100 text-lime-800"
+            : v === "on hold" ? "bg-slate-200 text-slate-700"
+            : "bg-amber-100 text-amber-800";
+  return `<span class="text-xs font-semibold px-2 py-0.5 rounded-full ${cls}">${esc(s || "—")}</span>`;
+}
+
+// ---- DATA -----------------------------------------------------------------
+function load() {
+  if (CSV_URL.startsWith("PASTE")) {
+    $("synced").textContent = "Set CSV_URL in index.html";
+    return;
+  }
+  // Columns are matched by header name, not position, so reordering the sheet won't break the dashboard.
+  Papa.parse(CSV_URL, {
+    download: true,
+    header: true,
+    skipEmptyLines: true,
+    transformHeader: h => h.trim(),
+    complete: res => {
+      rows = res.data.filter(r => val(r, "Request Type"));
+      $("synced").textContent = "Synced " + new Date().toLocaleTimeString();
+      renderFilters();
+      render();
+    },
+    error: err => { $("synced").textContent = "Load failed: " + err.message; }
+  });
+}
+
+// ---- FILTERS (per tab) ----------------------------------------------------
+// Rebuilds the dropdowns for the current tab. Called on tab change and after each data load.
+function renderFilters() {
+  const form = currentForm();
+  const base = rows.filter(r => val(r, "Request Type") === form.type);
+  $("dyn").innerHTML = form.filters.map(f => {
+    const values = [...new Set(base.map(r => norm(val(r, f.field))).filter(Boolean))].sort();
+    const selected = filterState[f.field] || "";
+    const show = f.display || (v => v);
+    return `
+      <select data-field="${esc(f.field)}" class="border border-slate-300 rounded-lg px-3 py-2 text-sm max-w-[260px]">
+        <option value="">All ${esc(f.label)}</option>
+        ${values.map(v => `<option value="${esc(v)}" ${v === selected ? "selected" : ""}>${esc(show(v))}</option>`).join("")}
+      </select>`;
+  }).join("");
+}
+
+function applyFilters() {
+  const form = currentForm();
+  const q = $("search").value.trim().toLowerCase();
+  const base = rows.filter(r => val(r, "Request Type") === form.type);
+
+  let list = base;
+  for (const f of form.filters) {
+    const selected = filterState[f.field];
+    if (selected) list = list.filter(r => norm(val(r, f.field)) === selected);
+  }
+  if (q) list = list.filter(r => Object.values(r).join(" ").toLowerCase().includes(q));
+
+  const created = r => toDate(val(r, "Created"))?.getTime() ?? 0;
+  const updated = r => toDate(val(r, "Updated"))?.getTime() ?? 0;
+  const sort = $("sort").value;
+  list = [...list].sort((a, b) => {
+    if (sort === "created_asc") return created(a) - created(b);
+    if (sort === "updated_desc") return updated(b) - updated(a);
+    if (sort === "priority") return (isUrgent(b) - isUrgent(a)) || (created(b) - created(a));
+    return created(b) - created(a);
+  });
+
+  return { form, base, list };
+}
+
+// ---- RENDERING ------------------------------------------------------------
+function renderTabs() {
+  $("tabs").innerHTML = FORMS.map(f => {
+    const n = rows.filter(r => val(r, "Request Type") === f.type).length;
+    const on = f.type === current;
+    return `<button data-type="${esc(f.type)}" class="px-4 py-2 rounded-lg text-sm font-semibold transition ${
+      on ? "bg-brand-dark text-white" : "bg-white text-slate-600 hover:bg-slate-200"}">
+      ${esc(f.label)} <span class="ml-1 opacity-70">${n}</span></button>`;
+  }).join("");
+}
+
+function renderKpis(base) {
+  const total = base.length;
+  const open = base.filter(isOpen).length;
+  const resolved = total - open;
+  const pct = total ? Math.round(resolved / total * 100) : 0;
+  const card = (label, value) => `
+    <div class="bg-white rounded-xl shadow-sm p-4 border-t-4 border-brand-lime">
+      <p class="text-xs uppercase tracking-wide text-slate-500">${label}</p>
+      <p class="text-3xl font-bold text-brand-dark mt-1">${value}</p>
+    </div>`;
+  $("kpis").innerHTML = card("Total", total) + card("Open", open) + card("Resolved", resolved) + card("% Resolved", pct + "%");
+}
+
+function renderCard(r, form, i) {
+  const extras = form.extras
+    .filter(k => val(r, k))
+    .map(k => `<span><span class="text-slate-400">${esc(k.replace(":", ""))}:</span> ${esc(norm(val(r, k)))}</span>`)
+    .join("");
+  return `
+    <article data-i="${i}" class="bg-white rounded-xl shadow-sm p-5 cursor-pointer hover:shadow-md transition border-l-4 ${
+      isOpen(r) ? "border-amber-400" : "border-brand-lime"}">
+      <div class="flex justify-between items-start gap-3">
+        <span class="text-xs font-mono text-slate-500">${esc(val(r, "Issue Key"))}</span>
+        <div class="flex gap-2 items-center">
+          ${isUrgent(r) ? `<span class="text-xs font-bold text-red-600">URGENT</span>` : ""}
+          ${statusPill(val(r, "Status"))}
+        </div>
+      </div>
+      <h3 class="font-semibold text-brand-dark mt-2 leading-snug">${esc(val(r, "Summary") || val(r, "Work"))}</h3>
+      <p class="text-sm text-slate-500 mt-1 line-clamp-2">${esc(norm(val(r, "Concise Description")))}</p>
+      <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600 mt-3">
+        <span><span class="text-slate-400">Reporter:</span> ${esc(val(r, "Reporter"))}</span>
+        <span><span class="text-slate-400">Created:</span> ${fmtDate(val(r, "Created"))}</span>
+        ${extras}
+      </div>
+    </article>`;
+}
+
+function render() {
+  renderTabs();
+  const { form, base, list } = applyFilters();
+  renderKpis(base);
+  visible = list;
+  $("count").textContent = `${list.length} of ${base.length} requests`;
+  $("cards").innerHTML = list.length
+    ? list.map((r, i) => renderCard(r, form, i)).join("")
+    : `<p class="text-slate-500 col-span-full">No requests match these filters.</p>`;
+}
+
+// ---- MODAL ----------------------------------------------------------------
+function openModal(r) {
+  const form = currentForm();
+  const items = [
+    ["Reporter", val(r, "Reporter")],
+    ["Assignee", val(r, "Assignee")],
+    ["Created", fmtDate(val(r, "Created"))],
+    ["Last updated", fmtDate(val(r, "Updated"))],
+    ["Resolved", fmtDate(val(r, "Resolved Date"))],
+    ["Priority", val(r, "Priority")],
+    ...form.extras.map(k => [k.replace(":", ""), norm(val(r, k))]),
+  ].filter(([, v]) => v && v !== "—");
+
+  $("modal-body").innerHTML = `
+    <p class="text-xs font-mono text-slate-500">${esc(val(r, "Issue Key"))}</p>
+    <h2 class="text-xl font-bold text-brand-dark mt-1 pr-6">${esc(val(r, "Summary") || val(r, "Work"))}</h2>
+    <div class="mt-3">${statusPill(val(r, "Status"))}</div>
+    <dl class="grid grid-cols-2 gap-3 text-sm mt-5">
+      ${items.map(([k, v]) => `
+        <div><dt class="text-xs uppercase text-slate-400">${esc(k)}</dt><dd class="text-slate-700">${esc(v)}</dd></div>`).join("")}
+    </dl>
+    ${val(r, "Description") ? `
+      <div class="mt-5">
+        <h3 class="text-xs uppercase text-slate-400 mb-1">Description</h3>
+        <p class="whitespace-pre-wrap text-sm text-slate-700 bg-slate-50 rounded-lg p-3 max-h-72 overflow-y-auto">${esc(val(r, "Description"))}</p>
+      </div>` : ""}
+    <a href="${JIRA_BROWSE}${encodeURIComponent(val(r, "Issue Key"))}" target="_blank" rel="noopener"
+       class="inline-block mt-5 text-sm font-semibold text-brand-dark underline">Open in Jira ↗</a>`;
+
+  $("modal").classList.remove("hidden");
+  $("modal").classList.add("flex");
+}
+
+function closeModal() {
+  $("modal").classList.add("hidden");
+  $("modal").classList.remove("flex");
+}
+
+// ---- EVENTS ---------------------------------------------------------------
+$("search").addEventListener("input", render);
+$("sort").addEventListener("change", render);
+
+// Each dropdown belongs to the current tab; changing one re-renders the cards.
+$("dyn").addEventListener("change", e => {
+  const field = e.target.dataset.field;
+  if (field) { filterState[field] = e.target.value; render(); }
+});
+
+$("tabs").addEventListener("click", e => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  current = b.dataset.type;
+  filterState = {};          // filters are per tab; start each tab fresh
+  renderFilters();
+  render();
+});
+
+$("cards").addEventListener("click", e => {
+  const a = e.target.closest("article");
+  if (a) openModal(visible[+a.dataset.i]);
+});
+
+$("modal").addEventListener("click", e => { if (e.target.id === "modal") closeModal(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal(); });
+
+renderFilters();
+render();
+load();
+setInterval(load, REFRESH_MS);
+</script>
+</body>
+</html>
