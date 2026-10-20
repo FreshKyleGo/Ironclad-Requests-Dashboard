@@ -170,7 +170,7 @@
 const JIRA_BROWSE = "https://hellofresh.atlassian.net/browse/"; // verify this matches your Jira site
 const REFRESH_MS = 5 * 60 * 1000;
 // Master Jira Database tab, published as CSV. Its Created / Resolved Date columns drive the monthly flow.
-const MASTER_CSV_URL = "PASTE_MASTER_JIRA_DATABASE_CSV_URL";
+const MASTER_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRh15oZu-4m53loU9MGIhsF3ASG0SbU64sPP0EfqIMPMySDjrqJcSmLeFjV5GPrW93t82OAHa9a7qVf/pub?gid=1429866924&single=true&output=csv";
 
 // filters: dropdowns for this tab, using only columns that exist in that tab's CSV.
 // display (optional): shortens long option labels; matching still uses the full value.
@@ -301,9 +301,12 @@ function statusBadge(s) {
   return `<span class="inline-block px-2.5 py-1 text-[9px] font-black uppercase tracking-wider rounded-lg border ${cls}">${esc(s || "—")}</span>`;
 }
 
-function tagCell(v) {
+function tagCell(v, key) {
+  const tone = key === "Country"
+    ? "bg-slate-100 text-slate-600 border-slate-300"
+    : "bg-indigo-50 text-indigo-700 border-indigo-200";
   return v
-    ? `<span class="inline-block px-2.5 py-1 text-[9px] font-black uppercase tracking-wider rounded-lg border bg-indigo-50 text-indigo-700 border-indigo-200">${esc(v)}</span>`
+    ? `<span class="inline-block px-2.5 py-1 text-[9px] font-black uppercase tracking-wider rounded-lg border ${tone}">${esc(v)}</span>`
     : `<span class="text-slate-400">—</span>`;
 }
 
@@ -629,7 +632,7 @@ function renderTable(list, form) {
       <td class="py-4 px-4 text-xs font-bold text-slate-700 max-w-sm truncate">${esc(summaryOf(r))}</td>
       <td class="py-4 px-4 text-xs text-slate-500 font-semibold">${esc(val(r, "Reporter"))}</td>
       <td class="py-4 px-4 text-center">${statusBadge(val(r, "Status"))}</td>
-      ${form.extras.map(k => `<td class="py-4 px-4 text-center">${tagCell(norm(val(r, k)))}</td>`).join("")}
+      ${form.extras.map(k => `<td class="py-4 px-4 text-center">${tagCell(norm(val(r, k)), k)}</td>`).join("")}
     </tr>`).join("")
   : `<tr><td colspan="${cols.length}" class="px-6 py-10 text-center text-xs font-bold uppercase tracking-wider text-slate-400">No requests match these filters</td></tr>`;
 }
