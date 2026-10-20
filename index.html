@@ -129,23 +129,28 @@
       </div>
     </section>
 
-    <!-- PORTFOLIO TABLE -->
-    <section class="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
-      <div class="flex flex-wrap justify-between items-center gap-2 mb-4">
+    <!-- PORTFOLIO TABLE (matches CI dashboard) -->
+    <section class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+      <div class="px-6 py-5 border-b border-slate-100 flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h2 class="text-lg font-black text-[#062115] tracking-tight">Requests Portfolio</h2>
-          <p id="count" class="text-xs text-slate-400 font-bold uppercase tracking-wider mt-1"></p>
+          <h2 id="portfolioTitle" class="text-lg font-black text-[#062115] tracking-tight">Requests Portfolio</h2>
+          <p class="text-xs text-slate-400 font-bold uppercase tracking-wider mt-1">Ironclad request log index</p>
         </div>
-        <select id="sort" class="no-print bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-xs font-bold uppercase tracking-wider text-slate-700 outline-none focus:ring-2 focus:ring-[#91c13e] cursor-pointer">
-          <option value="key_desc">Newest first</option>
-          <option value="key_asc">Oldest first</option>
-          <option value="status">Open first</option>
-        </select>
+        <div class="no-print flex flex-wrap items-center gap-3">
+          <div id="tableFilters" class="contents"></div>
+          <select id="sort" class="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-xs font-bold uppercase tracking-wider text-slate-700 outline-none focus:ring-2 focus:ring-[#91c13e] cursor-pointer">
+            <option value="" disabled>Sort By</option>
+            <option value="key_desc">Newest first</option>
+            <option value="key_asc">Oldest first</option>
+            <option value="status">Open first</option>
+          </select>
+          <span id="count" class="bg-emerald-50 text-[#062115] text-xs font-black uppercase tracking-wider px-3 py-2 rounded-xl"></span>
+        </div>
       </div>
       <div class="overflow-x-auto">
-        <table class="w-full text-sm">
-          <thead id="thead" class="bg-slate-50"></thead>
-          <tbody id="tbody"></tbody>
+        <table class="w-full text-left border-collapse">
+          <thead id="thead"></thead>
+          <tbody id="tbody" class="divide-y divide-slate-100"></tbody>
         </table>
       </div>
     </section>
@@ -224,7 +229,7 @@ const FORMS = [
 
 // ---- CONSTANTS ------------------------------------------------------------
 const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
-const SELECT = "bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-slate-700 outline-none focus:ring-2 focus:ring-[#91c13e] cursor-pointer";
+const SELECT = "bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-xs font-bold uppercase tracking-wider text-slate-700 outline-none focus:ring-2 focus:ring-[#91c13e] cursor-pointer";
 const STATUS_COLORS = { "open": "#91c13e", "in progress": "#3b82f6", "on hold": "#f59e0b", "resolved": "#059669", "closed": "#94a3b8" };
 const ICON = {
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
@@ -271,6 +276,37 @@ function statusPill(s) {
             : v === "on hold" ? "bg-slate-200 text-slate-700"
             : "bg-amber-100 text-amber-800";
   return `<span class="text-xs font-semibold px-2 py-0.5 rounded-full ${cls}">${esc(s || "—")}</span>`;
+}
+
+// ---- TABLE HELPERS (CI dashboard styling) ---------------------------------
+let sortKey = "key";
+let sortAsc = false;
+
+const ARROWS = '<svg viewBox="0 0 24 24" class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 15 5 5 5-5M7 9l5-5 5 5"/></svg>';
+const CHEVRON = '<svg viewBox="0 0 24 24" class="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>';
+
+function statusBadge(s) {
+  const done = (s || "").toLowerCase() === "resolved";
+  const cls = done ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-amber-50 text-amber-700 border-amber-200";
+  return `<span class="inline-block px-2.5 py-1 text-[9px] font-black uppercase tracking-wider rounded-lg border ${cls}">${esc(s || "—")}</span>`;
+}
+
+function tagCell(v) {
+  return v
+    ? `<span class="inline-block px-2.5 py-1 text-[9px] font-black uppercase tracking-wider rounded-lg border bg-indigo-50 text-indigo-700 border-indigo-200">${esc(v)}</span>`
+    : `<span class="text-slate-400">—</span>`;
+}
+
+function sortValue(r, key) {
+  if (key === "key") return keyNum(r);
+  if (key === "summary") return summaryOf(r).toLowerCase();
+  if (key === "status") return isOpen(r) ? 0 : 1;
+  if (key === "reporter") return val(r, "Reporter").toLowerCase();
+  return norm(val(r, key)).toLowerCase();
+}
+
+function syncSortSelect() {
+  $("sort").value = sortKey === "key" ? (sortAsc ? "key_asc" : "key_desc") : (sortKey === "status" ? "status" : "");
 }
 
 // ---- DATA -----------------------------------------------------------------
@@ -335,18 +371,18 @@ function dd(field, label, options, show = v => v) {
 function renderFilters() {
   const form = currentForm();
   const base = rowsFor();
-  let html = "";
+  let dates = "";
   if (hasCreated()) {
     const years = [...new Set(base.map(r => created(r)?.getFullYear()).filter(Boolean))].sort();
-    html += dd("year", "Years", years);
-    html += dd("quarter", "Quarters", ["Q1", "Q2", "Q3", "Q4"]);
-    html += dd("month", "Months", MONTHS);
+    dates += dd("year", "Years", years);
+    dates += dd("quarter", "Quarters", ["Q1", "Q2", "Q3", "Q4"]);
+    dates += dd("month", "Months", MONTHS);
   }
-  html += form.filters.map(f => {
+  $("dyn").innerHTML = dates;
+  $("tableFilters").innerHTML = form.filters.map(f => {
     const values = [...new Set(base.map(r => norm(val(r, f.field))).filter(Boolean))].sort();
     return dd(f.field, f.label, values, f.display);
   }).join("");
-  $("dyn").innerHTML = html;
 }
 
 function applyFilters() {
@@ -364,11 +400,10 @@ function applyFilters() {
   if (filterState.month) list = list.filter(r => { const d = created(r); return d && MONTHS[d.getMonth()] === filterState.month; });
   if (q) list = list.filter(r => Object.values(r).join(" ").toLowerCase().includes(q));
 
-  const sort = $("sort").value;
   list = [...list].sort((a, b) => {
-    if (sort === "key_asc") return keyNum(a) - keyNum(b);
-    if (sort === "status") return (isOpen(b) - isOpen(a)) || (keyNum(b) - keyNum(a));
-    return keyNum(b) - keyNum(a);
+    const x = sortValue(a, sortKey), y = sortValue(b, sortKey);
+    const c = x < y ? -1 : x > y ? 1 : 0;
+    return sortAsc ? c : -c;
   });
 
   return { form, base, list };
@@ -525,18 +560,30 @@ function renderDonut(list) {
 
 // ---- TABLE ----------------------------------------------------------------
 function renderTable(list, form) {
-  const heads = ["Key", "Summary", "Status", "Reporter", ...form.extras.map(k => k.replace(":", ""))];
-  $("thead").innerHTML = `<tr>${heads.map(h =>
-    `<th class="text-left px-4 py-3 text-[10px] font-black uppercase tracking-wider text-slate-400">${esc(h)}</th>`).join("")}</tr>`;
+  const cols = [
+    { key: "key", label: "Issue Key", th: "py-4 px-6 w-32", center: false },
+    { key: "summary", label: "Summary", th: "py-4 px-4", center: false },
+    { key: "reporter", label: "Reporter", th: "py-4 px-4 w-44", center: false },
+    { key: "status", label: "Status", th: "py-4 px-4 w-32", center: true },
+    ...form.extras.map(k => ({ key: k, label: k.replace(":", ""), th: "py-4 px-4 w-36", center: true })),
+  ];
+  $("thead").innerHTML = `<tr class="border-b border-slate-100 bg-slate-50/50 text-slate-400 font-bold uppercase text-[10px] tracking-widest">${
+    cols.map(c => `
+      <th data-key="${esc(c.key)}" class="${c.th} cursor-pointer select-none hover:text-[#062115] ${sortKey === c.key ? "text-[#062115]" : ""}">
+        <div class="flex items-center gap-1 ${c.center ? "justify-center" : ""}">${esc(c.label)} ${ARROWS}</div>
+      </th>`).join("")}</tr>`;
+
   $("tbody").innerHTML = list.length ? list.map((r, i) => `
-    <tr data-i="${i}" class="cursor-pointer hover:bg-slate-50 border-t border-slate-100">
-      <td class="px-4 py-3 font-mono text-xs text-slate-500 whitespace-nowrap">${esc(keyOf(r))}</td>
-      <td class="px-4 py-3 font-semibold text-[#062115]">${esc(summaryOf(r))}</td>
-      <td class="px-4 py-3">${statusPill(val(r, "Status"))}</td>
-      <td class="px-4 py-3 text-xs text-slate-600">${esc(val(r, "Reporter"))}</td>
-      ${form.extras.map(k => `<td class="px-4 py-3 text-xs text-slate-600">${esc(norm(val(r, k)))}</td>`).join("")}
+    <tr data-i="${i}" class="cursor-pointer hover:bg-slate-50/40 transition-colors">
+      <td class="py-4 px-6 font-bold text-slate-800 text-xs tracking-wider whitespace-nowrap">
+        <div class="flex items-center gap-1.5">${CHEVRON}<span>${esc(keyOf(r))}</span></div>
+      </td>
+      <td class="py-4 px-4 text-xs font-bold text-slate-700 max-w-sm truncate">${esc(summaryOf(r))}</td>
+      <td class="py-4 px-4 text-xs text-slate-500 font-semibold">${esc(val(r, "Reporter"))}</td>
+      <td class="py-4 px-4 text-center">${statusBadge(val(r, "Status"))}</td>
+      ${form.extras.map(k => `<td class="py-4 px-4 text-center">${tagCell(norm(val(r, k)))}</td>`).join("")}
     </tr>`).join("")
-    : `<tr><td colspan="${heads.length}" class="px-4 py-8 text-center text-slate-400">No requests match these filters.</td></tr>`;
+  : `<tr><td colspan="${cols.length}" class="px-6 py-10 text-center text-xs font-bold uppercase tracking-wider text-slate-400">No requests match these filters</td></tr>`;
 }
 
 // ---- MODAL ----------------------------------------------------------------
@@ -583,18 +630,28 @@ function render() {
   renderMomentum(list);
   renderDonut(list);
   renderTable(list, form);
-  $("count").textContent = `${list.length} of ${base.length} requests`;
+  $("portfolioTitle").textContent = form.title + " Portfolio";
+  $("count").textContent = `${list.length} Requests`;
+  syncSortSelect();
   visible = list;
 }
 
 // ---- EVENTS ---------------------------------------------------------------
 $("search").addEventListener("input", render);
-$("sort").addEventListener("change", render);
+$("sort").addEventListener("change", e => {
+  const v = e.target.value;
+  if (v === "key_desc") { sortKey = "key"; sortAsc = false; }
+  if (v === "key_asc") { sortKey = "key"; sortAsc = true; }
+  if (v === "status") { sortKey = "status"; sortAsc = true; }
+  render();
+});
 
-$("dyn").addEventListener("change", e => {
+const onFilterChange = e => {
   const field = e.target.dataset.field;
   if (field) { filterState[field] = e.target.value; render(); }
-});
+};
+$("dyn").addEventListener("change", onFilterChange);
+$("tableFilters").addEventListener("change", onFilterChange);
 
 $("clear").addEventListener("click", () => {
   filterState = {};
@@ -616,6 +673,15 @@ $("tabs").addEventListener("click", e => {
 $("tbody").addEventListener("click", e => {
   const tr = e.target.closest("tr[data-i]");
   if (tr) openModal(visible[+tr.dataset.i]);
+});
+
+$("thead").addEventListener("click", e => {
+  const th = e.target.closest("th[data-key]");
+  if (!th) return;
+  const k = th.dataset.key;
+  if (sortKey === k) sortAsc = !sortAsc;
+  else { sortKey = k; sortAsc = true; }
+  render();
 });
 
 $("modal").addEventListener("click", e => { if (e.target.id === "modal") closeModal(); });
